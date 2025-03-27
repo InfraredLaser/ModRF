@@ -7,7 +7,7 @@ from mcculw.enums import ScanOptions
 from ctypes import cast, POINTER, c_ushort
 from time import sleep
 
-import socket
+import subprocess
 
 MSG = "H"       # Message
 LOW_CHAN = 0
