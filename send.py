@@ -7,8 +7,6 @@ from mcculw.enums import ScanOptions
 from ctypes import cast, POINTER, c_ushort
 from time import sleep
 
-import subprocess
-
 MSG = "H"       # Message
 LOW_CHAN = 0
 HIG_CHAN = 0 #min(3, ao_info.num_chans - 1)
@@ -20,11 +18,13 @@ D = 1           # Duration
 DAQ_RANGE = daq.ULRange.BIP10VOLTS
 
 # LC Drive
-V1 = 1.4 # High, 1
-V2 = 1.6 # Low, 0
+V1 = 1.40 # High, 1
+V2 = 1.60 # Low, 0
 
 def send():
+
     # Initialize devices
+    print("initialize AO Device...")
     devices    = daq.configure_devices()
     usb_3101fs = daq.McculwUsbDaq(devices['USB-3101FS'])
 
@@ -39,6 +39,7 @@ def send():
     waves.waveform('square', usb_3101fs, ao_buffer, D, S_F, 0, F)
     sleep(0.2)
     print('Beginning scan...')
+
     try:
         a_out_scan(
             board_num=usb_3101fs.daq_board_num,
