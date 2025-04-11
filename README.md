@@ -10,4 +10,5 @@ Liquid Crystals in a modulated retro reflector setup.
     - recv.py runs a subprocess (send.py) which builds the modulating waveform in the AO buffer
 
 ## How to run scripts
-Run recv.py in terminal to see comm output.
+1) Configure vsCode terminal or terminal with proper env.
+2) Run recv.py in terminal to see comm ouput.
