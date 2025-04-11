@@ -32,6 +32,17 @@ def daq_ao_waveform_single_char_2(usb_daq:daq.McculwUsbDaq, buffer, character:st
         character = character
     )
 
+def daq_ao_waveform_bvCurve(usb_daq:daq.McculwUsbDaq, buffer):
+    waves.waveform_bvCurve(
+        daq=usb_daq,
+        buffer=buffer,
+        duration=daq.DaqAO.DURAION.value,
+        sample_rate=daq.DaqAO.FREQ_SAMPLE.value,
+        a_max=6,
+        frequency=daq.LC.FREQ_LC.value,
+        mod_period=0.080, #ms
+    )
+
 def send():
     # Create a TCP/IP socket
     try:
@@ -69,7 +80,9 @@ def send():
         # messege = ['P', 'P']
         # messege = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
         messege = "Hello World"
+        # messege = " "
         for c in messege:
+            # daq_ao_waveform_single_char_2(usb_3101fs, ao_buffer, c)
             daq_ao_waveform_single_char_2(usb_3101fs, ao_buffer, c)
             sleep(SLEEP_STEP)
 

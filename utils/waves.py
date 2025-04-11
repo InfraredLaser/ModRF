@@ -4,6 +4,7 @@ import numpy as np
 from scipy.signal import square
 from mcculw.ul import from_eng_units
 from utils.daq import DaqAI
+import ctypes
 
 import matplotlib.pyplot as plt
 
@@ -160,6 +161,39 @@ def waveform_single_char_2(
                                 eng_units_value=sample)
         buffer[i] = raw_value
 
+def waveform_bvCurve(        
+        daq:McculwUsbDaq,
+        buffer,
+        duration:int,
+        sample_rate:int,
+        a_max:float,
+        frequency:int,
+        mod_period:float):
+    ''' Create a buffer which sweeps between a voltage range for BV Curve plots. '''
+
+    t = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
+    square_wave = np.sign(np.sin(2 * np.pi * frequency * t))
+    v_step = np.arange(0, a_max, mod_period, dtype=float,)
+    m_period = int(mod_period * sample_rate)
+
+    square_wave = np.sign(np.sin(2 * np.pi * frequency * t))
+    m_period = int((1/len(v_step)) * sample_rate)
+    w_start = 0
+    w_stop = m_period
+
+    for v in v_step:
+        square_wave[w_start:w_stop] = v * square_wave[w_start:w_stop]
+        w_start = w_stop
+        w_stop += m_period
+
+    for i, sample in enumerate(square_wave):
+        raw_value = from_eng_units(board_num=daq.daq_board_num, 
+                                ul_range=daq.daq_ao_range, 
+                                eng_units_value=sample)
+        buffer[i] = raw_value
+    # ctypes.memmove(buffer, square_wave.ctypes.data, square_wave.nbytes)
+
+
 def plot_bvCurve(title:str, voltages, intensity:list):
     '''
         Plots Birefringence vs Voltage curve.
@@ -178,6 +212,20 @@ def plot_bvCurve(title:str, voltages, intensity:list):
     plt.grid(True)
     plt.show()
     plt.xticks()
+
+def plot_bvCurve_buffer(title:str, buffer:np.array):
+    ''' Make sure to adjust voltage to max amplitude from buffer creation. '''
+    v = np.arange(0, 6, 6/(len(buffer)), dtype=float)
+    print(f"Len v: {len(v)} | Len Buff: {len(buffer)}")
+    plt.figure(figsize=(10, 4))
+    plt.scatter(v, buffer)
+    plt.title(title)
+    plt.xlabel('Voltage')
+    plt.ylabel('Intensity')
+    plt.grid(True)
+    plt.show()
+    plt.xticks()
+
 
 def plot_switchSpeed(title:str, ao, ai):
     '''

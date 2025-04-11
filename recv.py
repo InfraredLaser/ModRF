@@ -107,7 +107,7 @@ def recv():
         ul.win_buf_free(memhandle_ai)
         ul.stop_background(usb_202.daq_board_num, FunctionType.AIFUNCTION)
         usb_202.release_device()
-        waves.plot_ai_buffer(f'buffer', buf)
+        # waves.plot_bvCurve_buffer(f'BV Curve Sample LC ModRF', buf)
 
 if __name__ == '__main__':
     recv()
