@@ -2,127 +2,112 @@
     Script used to receive byte string data from send.py
 """
 
-from utils import daq
+from utils import daq, waves
 from mcculw.enums import ScanOptions, FunctionType, Status
 from mcculw import ul
-from ctypes import cast, POINTER, c_ulong
+
 from time import sleep
-import os, subprocess, binascii
+import subprocess, ctypes
+import numpy as np
+import zmq
 
-# AI Configuration for USB DAQ
-LOW_CHAN = 0
-HIG_CHAN = 0 #min(3, ao_info.num_chans - 1)
-NUM_CHANS = HIG_CHAN - LOW_CHAN + 1
-S_F = 1_00    # Sample rate or freq
-D = 1           # Duration
-DAQ_RANGE = daq.ULRange.BIP10VOLTS
-V1 = 1.40
-V2 = 1.60
-
-# Get the current environment and add Python environment variables if needed
-env = os.environ.copy()
-env['PYTHONPATH'] = r"env\Scripts\python"  # Add current directory to PYTHONPATH
+# BIT_THRESH = daq.DaqAI.BIT_LOW.value + (daq.DaqAI.BIT_HIG.value - daq.DaqAI.BIT_LOW.value) / 2
+BIT_THRESH = 1.35
 
 def process_send():
         # Begin subprocess to start recv script
     try:
         process_s = subprocess.Popen(
-            [r"env\Scripts\python", "send.py"],
+            [r"env\Scripts\python", "send.py"]
             # stdout=subprocess.PIPE,
-            # stderr=subprocess.PIPE,
+            # stderr=subprocess.PIPE
             # text=True
             )
     except subprocess.CalledProcessError as e_sub:
         print(f"[ERROR]: Subprocess error: {e_sub}")
 
-    print("\nBeginning subprocess send.py")
-    print("Wait some time for send.py script to initialize...")
-    sleep(3)
-
-    # for line in process_s.stderr:
-    #     print(f"[STDOUT]: {line}")
-
+    print("[recv.py] Begin send.py subprocess.")
+    # sleep(5)
     return process_s
 
-def recv():
-    # Start send.py
-    process_s = process_send()
+def process_buf(buf:np.array):
+    proc_buf = np.where(buf <= BIT_THRESH, 0, 1)
+    s_f = daq.DaqAI.FREQ_SAMPLE.value
+    b_str = b''
+                    #  0     1     0     0     1     0     0     0 for H
+    finite_window = [0.23, 0.31, 0.39, 0.46, 0.55, 0.63, 0.71, 0.79]
+    for t in finite_window:
+        b_str += b'1' if proc_buf[int(t*s_f)] == 1 else b'0'
 
+    print(f'Received: {b_str} | {chr(int(b_str, 2))}')
+    return proc_buf
+
+def recv():
+    # Create a TCP/IP socket
+    try:
+        context = zmq.Context()
+        recv_socket = context.socket(zmq.REP)
+        recv_socket.bind(f"tcp://*:{str(daq.Sockets.PORT.value)}")
+        print(f"[recv.py] Created TCP/IP on {daq.Sockets.HOST.value}:{daq.Sockets.PORT.value}")
+        process_s = process_send()
+
+    except KeyboardInterrupt:
+        print("Interrupt.")
+
+    # Initialize devices
     devices = daq.configure_devices()
     usb_202 = daq.McculwUsbDaq(devices['USB-202'])
-    usb_202.set_daq_ai_range(0, DAQ_RANGE)
 
-    memhandle = ul.win_buf_alloc(S_F * D * NUM_CHANS)
-    ctypes_array = cast(memhandle, POINTER(c_ulong))
-    scan_options = (ScanOptions.BACKGROUND | ScanOptions.CONTINUOUS)
+    # Set AI Range equal to AO range of send DAQ
+    usb_202.set_daq_ai_range(0, daq.DaqAI.AI_RANGE.value)
 
-    # Start scan
-    ul.a_in_scan(
-        board_num=usb_202.daq_board_num,
-        low_chan=LOW_CHAN,
-        high_chan=HIG_CHAN,
-        num_points=S_F*D*NUM_CHANS,
-        rate=S_F,
-        ul_range=usb_202.daq_ai_range,
-        memhandle=memhandle,
-        options=scan_options
-    )
-    i=0
-    comms = b''
-    status, curr_count, curr_index = ul.get_status(usb_202.daq_board_num, FunctionType.AIFUNCTION)
-    print('Start Scan...')
+    # Allocate buffer size for AI ADC
+    memhandle_ai = ul.scaled_win_buf_alloc(daq.DaqAI.FREQ_SAMPLE.value)
+    buff_ai = (ctypes.c_double * daq.DaqAI.FREQ_SAMPLE.value)()
+    scan_options = (ScanOptions.BACKGROUND | ScanOptions.CONTINUOUS | ScanOptions.SCALEDATA)
+
+    # Start background scan
+    response = recv_socket.recv_string()
+    print(f'{response}')
 
     try:
-        while status != Status.IDLE:
-            if curr_count > 0:
-                for data_index in range(0, curr_index + NUM_CHANS):
-                    if ScanOptions.SCALEDATA in scan_options:
-                        # If the SCALEDATA ScanOption was used, the values
-                        # in the array are already in engineering units.
-                        eng_value = ctypes_array[data_index]
-                    else:
-                        # If the SCALEDATA ScanOption was NOT used, the
-                        # values in the array must be converted to
-                        # engineering units using ul.to_eng_units().
-                        eng_value = ul.to_eng_units(
-                            usb_202.daq_board_num, 
-                            usb_202.daq_ai_range,
-                            ctypes_array[data_index]
-                        )
-                    
-                    v_round = round(eng_value, 1)
-                    # print(f"AI: {v_round:0.2f}", end="\r")
-                    if len(comms) == 8:
-                        #print(binascii.b2a_uu(comms))
-                        print(f"\rreceived char: {chr(int(comms, 2))}", end='')
-                        comms = b''
+        daq.daq_ai_scan(usb_202, memhandle_ai, scan_options)
+    except Exception as e_ai:
+        print(f"[ERROR] [AI] {e_ai}\n")
 
-                    if v_round >= 2.75:
-                        #print(f"\rbin: 1", end="")
-                        comms += b'1'
-                    elif v_round <= 2.75 and v_round >= 2.3:
-                        #print(f"\rbin: 0", end="")
-                        comms += b'0'
-                    else:
-                        continue
+    # Wait for USB_DAQ to initialize read
+    status_ai = Status.RUNNING
+    while status_ai == Status.IDLE:
+        status_ai, _, _ = ul.get_status(usb_202.daq_board_num, FunctionType.AIFUNCTION)
 
-            # Wait a while before adding more values to the display.
-            sleep(0.100)
-            status, curr_count, curr_index = ul.get_status(usb_202.daq_board_num, FunctionType.AIFUNCTION)
-            i+=1
-
+    try:
+        # Read buffer and parse for characters
+        num_buf_processed = 0
+        POINTS_TO_COPY = 0
+        buf = []
+        # messege = ['-', 'H', 'E', 'L', 'L', 'O', 'W']
+        messege = 12
+        while status_ai != Status.IDLE:
+            for c in range(messege):
+                # print(response)
+                status_ai, num_pts_scanned, curr_idx = ul.get_status(usb_202.daq_board_num, FunctionType.AIFUNCTION)
+                ul.scaled_win_buf_to_array(memhandle_ai, buff_ai, POINTS_TO_COPY, daq.DaqAI.FREQ_SAMPLE.value - POINTS_TO_COPY)
+                buf = np.copy(buff_ai)
+                buf = process_buf(buf)
+                sleep(1)
+            status_ai = Status.IDLE
+        
         ul.stop_background(usb_202.daq_board_num, FunctionType.AIFUNCTION)
-        print('Finished Buffer')
-        print("Scan end...")
     except Exception as e:
-        print(f"[ERROR]: Exception {e}\n")
+        print(f"[recv.py] [ERROR]: Exception {e}\n")
     except KeyboardInterrupt:
-        print("Exit process through interrupt.")
+        print("[recv.py] Exit process through interrupt.")
     finally:
-        sleep(0.100)
-        ul.win_buf_free(memhandle)
+        sleep(0.500)
+        ul.win_buf_free(memhandle_ai)
+        ul.stop_background(usb_202.daq_board_num, FunctionType.AIFUNCTION)
         usb_202.release_device()
-        process_s.terminate()
+        waves.plot_ai_buffer(f'buffer', buf)
 
 if __name__ == '__main__':
     recv()

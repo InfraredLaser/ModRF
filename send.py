@@ -1,75 +1,90 @@
 """
-    Script to send communication for recv.py to process.
+    Script to send communication for recv.py to process. (subprocess for recv.py)
 """
 from utils import daq, waves
-from mcculw.ul import a_out_scan, win_buf_alloc, win_buf_free
-from mcculw.enums import ScanOptions
+from mcculw.ul import a_out_scan, win_buf_alloc, win_buf_free, stop_background
+from mcculw.enums import ScanOptions, FunctionType
 from ctypes import cast, POINTER, c_ushort
 from time import sleep
+import sys, zmq
 
-MSG = "H"       # Message
-LOW_CHAN = 0
-HIG_CHAN = 0 #min(3, ao_info.num_chans - 1)
-NUM_CHANS = HIG_CHAN - LOW_CHAN + 1
-A = 1           # Amplitude
-F =  200        # Frequency
-S_F = 20_000    # Sample rate or freq
-D = 1           # Duration
-DAQ_RANGE = daq.ULRange.BIP10VOLTS
-
-# LC Drive
-V1 = 1.40 # High, 1
-V2 = 1.60 # Low, 0
+def daq_wf_ao_amplitude(usb_daq:daq.McculwUsbDaq, buffer, amplitude:float):
+    ''' Handle function to change amplitude of a waveform ao buffer '''
+    waves.waveform(
+        waveform_type='square',
+        daq=usb_daq,
+        buffer=buffer,
+        duration=daq.DaqAO.DURAION.value,
+        sample_rate=daq.DaqAO.FREQ_SAMPLE.value,
+        amplitude=amplitude,
+        frequency=daq.LC.FREQ_LC.value
+    )
+def daq_ao_waveform_single_char_2(usb_daq:daq.McculwUsbDaq, buffer, character:str):
+    waves.waveform_single_char_2(
+        daq=usb_daq,
+        buffer=buffer,
+        duration=daq.DaqAO.DURAION.value,
+        sample_rate=daq.DaqAO.FREQ_SAMPLE.value,
+        a_max=daq.LC.V_OFF.value,
+        a_min=daq.LC.V_ON.value,
+        frequency=daq.LC.FREQ_LC.value,
+        mod_period=0.080, #ms
+        character = character
+    )
 
 def send():
+    # Create a TCP/IP socket
+    try:
+        context = zmq.Context()
+        send_socket = context.socket(zmq.REQ)
+        send_socket.connect(f"tcp://localhost:{str(daq.Sockets.PORT.value)}")
+        print(f"[send.py] Connecting to {daq.Sockets.HOST.value}:{daq.Sockets.PORT.value}")
+    except Exception as e:
+        print(f"{e}")
 
     # Initialize devices
-    print("initialize AO Device...")
     devices    = daq.configure_devices()
     usb_3101fs = daq.McculwUsbDaq(devices['USB-3101FS'])
-
+    
     # Set AO range equal to AI range on read DAQ
-    usb_3101fs.set_daq_ao_range(0, DAQ_RANGE)
+    usb_3101fs.set_daq_ao_range(0, daq.DaqAO.AO_RANGE.value)
 
     # Initialize AO Buffer
-    memhandle    = win_buf_alloc(S_F * D * NUM_CHANS)
+    NUM_CHANS    = daq.DaqAO.CHAN_HIG.value - daq.DaqAO.CHAN_LOW.value + 1
+    memhandle    = win_buf_alloc(daq.DaqAO.FREQ_SAMPLE.value * daq.DaqAO.DURAION.value * NUM_CHANS)
     ao_buffer    = cast(memhandle, POINTER(c_ushort))
     scan_options = (ScanOptions.BACKGROUND | ScanOptions.CONTINUOUS)
 
-    waves.waveform('square', usb_3101fs, ao_buffer, D, S_F, 0, F)
-    sleep(0.2)
-    print('Beginning scan...')
-
+    send_socket.send_string('[send.py] Initialized AO. Begin AO scan.')
     try:
-        a_out_scan(
-            board_num=usb_3101fs.daq_board_num,
-            low_chan=LOW_CHAN, 
-            high_chan=HIG_CHAN, 
-            num_points=S_F * D * NUM_CHANS, 
-            rate=S_F, 
-            ul_range=usb_3101fs.daq_ao_range, 
-            memhandle=memhandle, 
-            options=scan_options
+        daq.daq_ao_scan(usb_daq=usb_3101fs,
+                        memhandle=memhandle, 
+                        options=scan_options
         )
-        try:
-            while(True):
-                b_msg = bin(ord(MSG))[2:]
-                for b in b_msg:
-                    if b == str(1):
-                        waves.waveform('square', usb_3101fs, ao_buffer, D, S_F, V1, F)
-                    else: # b == 0
-                        waves.waveform('square', usb_3101fs, ao_buffer, D, S_F, V2, F)
-                    sleep(0.100)
-                sleep(0.5)
-        except KeyboardInterrupt:
-            print('Interrupt')
+    except Exception as e_ao:
+        print(f"[ERROR] [AO] {e_ao}\n")
+    
+    try:
+        SLEEP_STEP = 1
+        # messege = ['P', 'P']
+        # messege = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
+        messege = "Hello World"
+        for c in messege:
+            daq_ao_waveform_single_char_2(usb_3101fs, ao_buffer, c)
+            sleep(SLEEP_STEP)
 
+        daq_wf_ao_amplitude(usb_3101fs, ao_buffer, 0)
+        sleep(SLEEP_STEP)
+        
+    except KeyboardInterrupt:
+        print('Interrupt')
     except Exception as e:
         print(f'[ERROR]: {e}\n')
     finally:
-        waves.waveform('square', usb_3101fs, ao_buffer, D, S_F, 0, F)
-        sleep(0.1)
+        daq_wf_ao_amplitude(usb_3101fs, ao_buffer, 0)
+        sleep(0.3)
         win_buf_free(memhandle)
+        stop_background(usb_3101fs.daq_board_num, FunctionType.AOFUNCTION)
         usb_3101fs.release_device()
 
 if __name__ == "__main__":
